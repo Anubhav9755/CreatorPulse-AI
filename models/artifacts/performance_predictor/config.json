@@ -1,0 +1,60 @@
+{
+  "numeric_features": [
+    "subscriber_count",
+    "upload_hour",
+    "day_of_week",
+    "video_duration_sec",
+    "title_length",
+    "thumbnail_text_length",
+    "sentiment_score",
+    "like_ratio_24h",
+    "comment_ratio_24h",
+    "engagement_velocity_24h",
+    "retention_avg_pct",
+    "retention_p25_pct",
+    "retention_p50_pct",
+    "retention_p75_pct"
+  ],
+  "embedding_features": [
+    "topic_emb_0",
+    "topic_emb_1",
+    "topic_emb_2",
+    "topic_emb_3",
+    "topic_emb_4",
+    "topic_emb_5",
+    "topic_emb_6",
+    "topic_emb_7",
+    "topic_emb_8",
+    "topic_emb_9",
+    "topic_emb_10",
+    "topic_emb_11",
+    "topic_emb_12",
+    "topic_emb_13",
+    "topic_emb_14",
+    "topic_emb_15"
+  ],
+  "categorical_features": [
+    "niche",
+    "country",
+    "topic"
+  ],
+  "target_regression": [
+    "views_24h",
+    "views_7d",
+    "engagement_velocity_24h"
+  ],
+  "target_classification": "virality_label",
+  "learning_rate": 0.001,
+  "hidden_units_num": [
+    128,
+    64
+  ],
+  "hidden_units_emb": [
+    64
+  ],
+  "hidden_units_combined": [
+    128,
+    64
+  ],
+  "dropout_rate": 0.2
+}
