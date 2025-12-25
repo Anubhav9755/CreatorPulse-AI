@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+
+# Data and models (generated artifacts)
+data/youtube_data.csv
+models/artifacts/
+
+# VS Code
+.vscode/
