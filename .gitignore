@@ -9,7 +9,7 @@ __pycache__/
 
 # Data and models (generated artifacts)
 data/youtube_data.csv
-models/artifacts/
+
 
 # VS Code
 .vscode/

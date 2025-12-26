@@ -18,6 +18,10 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 
+# =========================
+# Feature definitions
+# =========================
+
 NUMERIC_FEATURES = [
     "subscriber_count",
     "upload_hour",
@@ -36,12 +40,15 @@ NUMERIC_FEATURES = [
 ]
 
 EMBEDDING_FEATURES = [f"topic_emb_{i}" for i in range(16)]
-
 CATEGORICAL_FEATURES = ["niche", "country", "topic"]
 
 TARGET_REGRESSION = ["views_24h", "views_7d", "engagement_velocity_24h"]
 TARGET_CLASSIFICATION = "virality_label"
 
+
+# =========================
+# Config dataclass
+# =========================
 
 @dataclass
 class PerformancePredictorConfig:
@@ -57,6 +64,10 @@ class PerformancePredictorConfig:
     dropout_rate: float = 0.2
 
 
+# =========================
+# Main class
+# =========================
+
 class PerformancePredictor:
     """
     Multi-task model:
@@ -64,7 +75,7 @@ class PerformancePredictor:
       - Classification: virality_label (0/1)
 
     Uses:
-      - sklearn ColumnTransformer for preprocessing (scaling + one-hot)
+      - sklearn ColumnTransformer for preprocessing
       - TensorFlow Keras model for training & inference
     """
 
@@ -79,24 +90,23 @@ class PerformancePredictor:
 
         self.preprocessor: Optional[ColumnTransformer] = None
         self.model: Optional[keras.Model] = None
-
-        # Cache feature order after preprocessing
         self._feature_names_out: Optional[List[str]] = None
 
     # ------------------------------------------------------------------
     # Data preparation
     # ------------------------------------------------------------------
+
     def _build_preprocessor(self, df: pd.DataFrame) -> ColumnTransformer:
         numeric_features = self.config.numeric_features + self.config.embedding_features
         categorical_features = self.config.categorical_features
 
-        numeric_transformer = Pipeline(steps=[
-            ("scaler", StandardScaler())
-        ])
+        numeric_transformer = Pipeline(
+            steps=[("scaler", StandardScaler())]
+        )
 
-        categorical_transformer = Pipeline(steps=[
-            ("onehot", OneHotEncoder(handle_unknown="ignore"))
-        ])
+        categorical_transformer = Pipeline(
+            steps=[("onehot", OneHotEncoder(handle_unknown="ignore"))]
+        )
 
         preprocessor = ColumnTransformer(
             transformers=[
@@ -106,6 +116,7 @@ class PerformancePredictor:
         )
 
         preprocessor.fit(df[numeric_features + categorical_features])
+
         if hasattr(preprocessor, "get_feature_names_out"):
             self._feature_names_out = preprocessor.get_feature_names_out().tolist()
         else:
@@ -115,7 +126,7 @@ class PerformancePredictor:
 
     def _transform_features(self, df: pd.DataFrame) -> np.ndarray:
         if self.preprocessor is None:
-            raise RuntimeError("Preprocessor not fitted. Call fit() first.")
+            raise RuntimeError("Preprocessor not fitted or loaded.")
 
         numeric_features = self.config.numeric_features + self.config.embedding_features
         categorical_features = self.config.categorical_features
@@ -130,45 +141,43 @@ class PerformancePredictor:
     # ------------------------------------------------------------------
     # Model building
     # ------------------------------------------------------------------
+
     def _build_model(self, input_dim: int) -> keras.Model:
         cfg = self.config
 
         inputs = keras.Input(shape=(input_dim,), name="features")
-
-        # For clarity, split numeric+emb vs cat is already done in preprocessing,
-        # here we just feed the dense vector.
         x = inputs
 
-        # Shared trunk
         for units in cfg.hidden_units_combined:
             x = layers.Dense(units, activation="relu")(x)
             x = layers.BatchNormalization()(x)
             x = layers.Dropout(cfg.dropout_rate)(x)
 
-        # Regression head
-        reg_output = layers.Dense(len(cfg.target_regression), name="regression_head")(x)
+        reg_output = layers.Dense(
+            len(cfg.target_regression),
+            name="regression_head"
+        )(x)
 
-        # Classification head (binary)
-        cls_x = x
-        cls_x = layers.Dense(64, activation="relu")(cls_x)
+        cls_x = layers.Dense(64, activation="relu")(x)
         cls_x = layers.Dropout(cfg.dropout_rate)(cls_x)
-        cls_output = layers.Dense(1, activation="sigmoid", name="classification_head")(cls_x)
+        cls_output = layers.Dense(
+            1,
+            activation="sigmoid",
+            name="classification_head"
+        )(cls_x)
 
-        model = keras.Model(inputs=inputs, outputs=[reg_output, cls_output], name="performance_predictor")
-
-        losses = {
-            "regression_head": "mse",
-            "classification_head": "binary_crossentropy",
-        }
-        loss_weights = {
-            "regression_head": 1.0,
-            "classification_head": 1.0,
-        }
+        model = keras.Model(
+            inputs=inputs,
+            outputs=[reg_output, cls_output],
+            name="performance_predictor",
+        )
 
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=cfg.learning_rate),
-            loss=losses,
-            loss_weights=loss_weights,
+            loss={
+                "regression_head": "mse",
+                "classification_head": "binary_crossentropy",
+            },
             metrics={
                 "regression_head": [keras.metrics.MeanAbsoluteError(name="mae")],
                 "classification_head": [keras.metrics.AUC(name="auc")],
@@ -177,8 +186,9 @@ class PerformancePredictor:
         return model
 
     # ------------------------------------------------------------------
-    # Public API
+    # Training
     # ------------------------------------------------------------------
+
     def fit(
         self,
         train_df: pd.DataFrame,
@@ -187,41 +197,49 @@ class PerformancePredictor:
         epochs: int = 20,
         verbose: int = 1,
     ):
-        # Build preprocessor on train
         self.preprocessor = self._build_preprocessor(train_df)
 
-        # Transform features and targets
         X_train = self._transform_features(train_df)
         y_reg_train, y_cls_train = self._extract_targets(train_df)
 
+        validation_data = None
         if val_df is not None:
             X_val = self._transform_features(val_df)
             y_reg_val, y_cls_val = self._extract_targets(val_df)
-            validation_data = (X_val, {"regression_head": y_reg_val, "classification_head": y_cls_val})
-        else:
-            validation_data = None
+            validation_data = (
+                X_val,
+                {
+                    "regression_head": y_reg_val,
+                    "classification_head": y_cls_val,
+                },
+            )
 
-        # Build model
         self.model = self._build_model(input_dim=X_train.shape[1])
 
         callbacks = [
             keras.callbacks.EarlyStopping(
-                monitor="val_regression_head_loss",  # watch validation loss
-                mode="min",                          # smaller is better
+                monitor="val_regression_head_loss",
                 patience=3,
                 restore_best_weights=True,
             )
         ]
-        
+
         self.model.fit(
             X_train,
-            {"regression_head": y_reg_train, "classification_head": y_cls_train},
+            {
+                "regression_head": y_reg_train,
+                "classification_head": y_cls_train,
+            },
             validation_data=validation_data,
             batch_size=batch_size,
             epochs=epochs,
             callbacks=callbacks,
             verbose=verbose,
         )
+
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
 
     def predict(self, df: pd.DataFrame) -> Dict[str, np.ndarray]:
         if self.model is None or self.preprocessor is None:
@@ -230,45 +248,41 @@ class PerformancePredictor:
         X = self._transform_features(df)
         reg_pred, cls_pred = self.model.predict(X, verbose=0)
 
-        # reg_pred: columns follow TARGET_REGRESSION order
-        out = {
+        return {
             "views_24h_pred": reg_pred[:, 0],
             "views_7d_pred": reg_pred[:, 1],
             "engagement_velocity_24h_pred": reg_pred[:, 2],
             "virality_prob": cls_pred[:, 0],
         }
-        return out
 
     # ------------------------------------------------------------------
-    # Persistence
+    # Persistence (Keras 3 SAFE)
     # ------------------------------------------------------------------
+
     def save(self, path: str | Path):
         """
         Saves:
-          - Keras model (SavedModel format)
-          - sklearn preprocessor (joblib)
+          - TensorFlow SavedModel (Keras 3 compatible)
+          - sklearn preprocessor
           - config JSON
         """
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
 
-        # Save model
-        # Save model in native Keras format
+        # --- Save model as SavedModel ---
+        model_path = path / "tf_model_saved"
+        if model_path.exists():
+            import shutil
+            shutil.rmtree(model_path)
 
-        model_path = path / "tf_model.keras"
-        self.model.save(model_path)
+        self.model.export(str(model_path))
 
-    
-
-        # Save preprocessor
+        # --- Save preprocessor ---
         import joblib
+        joblib.dump(self.preprocessor, path / "preprocessor.joblib")
 
-        preproc_path = path / "preprocessor.joblib"
-        joblib.dump(self.preprocessor, preproc_path)
-
-        # Save config
-        cfg_path = path / "config.json"
-        with cfg_path.open("w") as f:
+        # --- Save config ---
+        with (path / "config.json").open("w") as f:
             json.dump(asdict(self.config), f, indent=2)
 
     @classmethod
@@ -276,22 +290,19 @@ class PerformancePredictor:
         path = Path(path)
 
         # Load config
-        cfg_path = path / "config.json"
-        with cfg_path.open("r") as f:
+        with (path / "config.json").open("r") as f:
             cfg_dict = json.load(f)
         config = PerformancePredictorConfig(**cfg_dict)
 
-        # Load model
+        # Load SavedModel (Keras 3 safe)
+        model = keras.models.load_model(
+            str(path / "tf_model_saved"),
+            compile=False
+        )
 
-        # Load model
-        model_path = path / "tf_model.keras"
-        model = keras.models.load_model(model_path)
-        
         # Load preprocessor
         import joblib
-
-        preproc_path = path / "preprocessor.joblib"
-        preprocessor = joblib.load(preproc_path)
+        preprocessor = joblib.load(path / "preprocessor.joblib")
 
         obj = cls(config=config)
         obj.model = model
